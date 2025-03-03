@@ -180,3 +180,156 @@ In many cases, you’d configure `ALyraGameMode` in your project `.ini` files or
 
 **Q**: Is the “dedicated server” code mandatory?  
 **A**: It’s there for advanced or large-scale multiplayer scenarios. You can remove or ignore it if you’re not using dedicated servers, but keep in mind it may break references within the code if you rely on them.
+
+
+
+# ALyraGameState
+
+## 1. Class/Struct Name
+**ALyraGameState**  
+> The base game state class used in the Lyra project. It implements `IAbilitySystemInterface` and tracks game-wide data such as server FPS and replay-recording state.
+
+---
+
+## 2. Overview
+`ALyraGameState` is a derived `AModularGameStateBase` designed to manage global game logic, hold a shared `ULyraAbilitySystemComponent`, and coordinate gameplay experiences within the Lyra framework. It maintains replication of server information like FPS, handles replay-specific logic, and broadcasts gameplay “verb” messages to all connected clients.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Global Ability System**: Provides a centralized `ULyraAbilitySystemComponent` for game-wide effects and cues.
+- **Server Metrics**: Tracks and replicates server FPS to clients.
+- **Replay Recording**: Identifies which `APlayerState` is recording a replay and broadcasts changes.
+- **Global Messaging**: Sends replicated “verb messages” to clients (both reliable and unreliable).
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `AModularGameStateBase` (part of the Lyra modular framework) and implements `IAbilitySystemInterface`.
+- **Key Class Dependencies**:
+  - `ULyraAbilitySystemComponent`: The centralized ability system component for this game state.
+  - `ULyraExperienceManagerComponent`: Manages the current gameplay experience (also attached to the game state).
+  - `APlayerState`: Used to track players; includes references for replay features.
+  - `UGameplayMessageSubsystem`: Handles broadcasting game messages to clients.
+
+---
+
+## 5. Important Members
+
+### Variables
+1. **`TObjectPtr<ULyraAbilitySystemComponent> AbilitySystemComponent`**  
+   - A replicated ability system component responsible for handling game-wide abilities and cues.  
+   - Initialized in the constructor and set to `Replicated` with `Mixed` replication mode.
+
+2. **`TObjectPtr<ULyraExperienceManagerComponent> ExperienceManagerComponent`**  
+   - Manages loading and applying the current gameplay “Experience.”  
+   - Created in the constructor via `CreateDefaultSubobject`.
+
+3. **`float ServerFPS`** *(Replicated)*  
+   - Stores the current server frames per second.  
+   - Updated every tick on the server and replicated to clients.
+
+4. **`TObjectPtr<APlayerState> RecorderPlayerState`** *(Transient, ReplicatedUsing = OnRep_RecorderPlayerState)*  
+   - Points to the `APlayerState` that recorded the replay.  
+   - Only replicated in replay contexts; used to track the correct pawn for replay viewers.
+
+5. **`FOnRecorderPlayerStateChanged OnRecorderPlayerStateChangedEvent`**  
+   - A multicast delegate invoked whenever `RecorderPlayerState` changes.
+
+### Methods
+1. **`ALyraGameState(const FObjectInitializer&)`**  
+   - Constructor setting up default subobjects (`AbilitySystemComponent`, `ExperienceManagerComponent`) and enabling ticking.
+
+2. **Overrides of `AActor` / `AGameStateBase`:**  
+   - `PreInitializeComponents()`, `PostInitializeComponents()`, `EndPlay()`, `Tick(float DeltaSeconds)`, `AddPlayerState(APlayerState*)`, `RemovePlayerState(APlayerState*)`, `SeamlessTravelTransitionCheckpoint(bool)`.  
+   - Notable is `Tick` where `ServerFPS` is updated on the server side each frame.
+
+3. **`virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;`**  
+   - Required by `IAbilitySystemInterface`. Returns `AbilitySystemComponent`.
+
+4. **`void MulticastMessageToClients(const FLyraVerbMessage Message)`** *(Unreliable)*  
+   - Sends an “unreliable” verb message to all clients, typically for events that can tolerate potential packet loss (e.g. elimination announcements).
+
+5. **`void MulticastReliableMessageToClients(const FLyraVerbMessage Message)`** *(Reliable)*  
+   - Sends a “reliable” verb message to all clients, guaranteeing delivery. Recommended for critical notifications.
+
+6. **`float GetServerFPS() const`**  
+   - Returns the replicated server FPS.
+
+7. **`void SetRecorderPlayerState(APlayerState* NewPlayerState)`**  
+   - Identifies the `PlayerState` that recorded the replay. Called once per game session.
+
+8. **`APlayerState* GetRecorderPlayerState() const`**  
+   - Retrieves the replay-recording player state, if valid.
+
+9. **`void OnRep_RecorderPlayerState()`**  
+   - Replication callback for `RecorderPlayerState`. Broadcasts `OnRecorderPlayerStateChangedEvent`.
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Constructor**  
+  - Initializes `AbilitySystemComponent` with replication enabled and a `Mixed` effect replication mode.  
+  - Creates an `ULyraExperienceManagerComponent` for experience handling.
+- **Pre/Post Initialization**  
+  - `PostInitializeComponents` initializes the ability actor info (`InitAbilityActorInfo`) to link the GameState as both owner and avatar.
+- **Tick**  
+  - Each server tick updates `ServerFPS` from `GAverageFPS`.
+- **Player State Management**  
+  - Overrides `AddPlayerState` and `RemovePlayerState` to manage `PlayerArray`; also handles bot or inactive states during seamless travel transitions.
+- **Message Broadcasting**  
+  - Uses `MulticastMessageToClients_Implementation` for unreliably broadcasting a `FLyraVerbMessage`.  
+  - `MulticastReliableMessageToClients_Implementation` calls the same method but marked “Reliable” to ensure delivery.
+
+---
+
+## 7. Example Usage
+
+```cpp
+// Typical usage is automatic: ALyraGameState is set as your GameStateClass in ALyraGameMode.
+// Access the ability system or server FPS from other parts of your code:
+
+ALyraGameState* LyraGS = GetWorld()->GetGameState<ALyraGameState>();
+if (LyraGS)
+{
+    float CurrentServerFPS = LyraGS->GetServerFPS();
+    ULyraAbilitySystemComponent* ASC = LyraGS->GetLyraAbilitySystemComponent();
+
+    // Example: Broadcasting a quick message
+    FLyraVerbMessage Message;
+    Message.Verb = FGameplayTag::RequestGameplayTag(FName("GameEvent.Example"));
+    Message.Instigator = ASC;
+    // ... fill out other fields as needed ...
+    
+    LyraGS->MulticastReliableMessageToClients(Message);
+}
+```
+
+### 8. Common Pitfalls & Edge Cases
+- **Forgetting to Initialize the Ability System**: Ensure `InitAbilityActorInfo` is set up properly in `PostInitializeComponents`.
+- **ServerFPS Update**: Only updated on servers. If your environment is not truly server-authoritative, `ServerFPS` might remain 0 on clients.
+- **RecorderPlayerState Replication**: Marked `COND_ReplayOnly`; if you expect it to replicate outside replay, you need a different approach.
+- **Multicast vs. Reliable Multicast**: Use the reliable version (`MulticastReliableMessageToClients`) for critical messages that cannot be dropped.
+
+---
+
+### 9. Future Improvements or TODOs
+- **Ability System Refactoring**: Some games might want a separate ability system for certain world-level effects vs. purely “global” effects.
+- **Enhanced Replay Features**: Additional logic for dynamic selection of the replay’s `RecorderPlayerState`.
+- **Extended Experience Manager**: The `ExperienceManagerComponent` could be leveraged more deeply for game state transitions.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Why can’t I see `ServerFPS` on clients?  
+**A**: Make sure your network role is set to `ROLE_Authority` on the server, and check the replication is working. Non-dedicated sessions or local play can yield different behaviors.
+
+**Q**: How do I use the `AbilitySystemComponent` from `ALyraGameState`?  
+**A**: Access it via `GetLyraAbilitySystemComponent()` or `GetAbilitySystemComponent()`. Be sure to initialize abilities in `PostInitializeComponents` or later.
+
+**Q**: Can I store references in `RecorderPlayerState` for non-replay usage?  
+**A**: By default, it’s intended for replay logic only. If you require extra game logic, consider replicating a separate variable or using standard `PlayerState` patterns.
+
+**Q**: Which messaging function should I use if reliability is uncertain?  
+**A**: For ephemeral events (like chat messages or kill feeds), `MulticastMessageToClients` (unreliable) is fine. For important notifications (like game-winning conditions), use `MulticastReliableMessageToClients`.
