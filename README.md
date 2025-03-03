@@ -537,3 +537,129 @@ In practice, the game mode or another controller typically calls `SetCurrentExpe
 
 **Q**: Is there a blueprint-friendly way to listen for experience load completion?  
 **A**: Use `CallOrRegister_OnExperienceLoaded` in C++ for best results, or create a blueprint event binding to that delegate. Alternatively, you can override `OnExperienceFullLoadCompleted` in a Blueprint subclass if needed.
+
+
+
+# ULyraExperienceManager
+
+## 1. Class/Struct Name
+**ULyraExperienceManager**  
+> An engine subsystem for managing experience-related game feature plugins, particularly in the Unreal Editor when multiple PIE sessions are running.
+
+---
+
+## 2. Overview
+`ULyraExperienceManager` is an `UEngineSubsystem` used to track and manage game feature plugin activation requests in editor builds. It provides a simple reference-count mechanism, ensuring that if multiple PIE (Play-In-Editor) sessions request the same plugin, it remains active until all sessions release it. This helps avoid prematurely unloading a plugin that’s still in use by another PIE session.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Plugin Activation Arbitration**: Tracks how many systems or PIE sessions have requested activation of a given plugin.
+- **Deferred Deactivation**: Prevents a plugin from being deactivated until all requesting sessions have released it.
+- **PIE Session Reset**: Clears its internal tracking when a new PIE session begins.
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `UEngineSubsystem` (meaning it’s globally available while the engine is running).
+- **Relies On**:  
+  - `GEngine->GetEngineSubsystem<ULyraExperienceManager>()` for global access.  
+  - Editor-only (`WITH_EDITOR`) logic ensures that plugin reference counting only happens in editor builds.
+
+---
+
+## 5. Important Members
+
+### Variables
+- **`TMap<FString, int32> GameFeaturePluginRequestCountMap`**  
+  - Maps a plugin URL (string) to how many times it has been requested.  
+  - Increments on each activation request; decrements when a release is requested.
+
+### Methods
+1. **`void OnPlayInEditorBegun()`** *(Editor-Only)*  
+   - Empties the `GameFeaturePluginRequestCountMap` at the start of a PIE session.  
+   - Ensures leftover data from previous sessions doesn’t interfere with new requests.
+
+2. **`static void NotifyOfPluginActivation(const FString PluginURL)`** *(Editor-Only)*  
+   - Called when a system (e.g., `ULyraExperienceManagerComponent`) wants to activate a game feature plugin.  
+   - Increments the reference count for that plugin URL in `GameFeaturePluginRequestCountMap`.
+
+3. **`static bool RequestToDeactivatePlugin(const FString PluginURL)`** *(Editor-Only)*  
+   - Called when a system wants to deactivate a game feature plugin.  
+   - Decrements the reference count and only returns `true` (allowing the plugin to deactivate) if the count has reached zero.  
+   - If the plugin is still in use (count > 0), returns `false` to prevent deactivation.
+
+4. **Non-Editor Implementations**  
+   - In non-editor builds, the methods do nothing or simply return a trivial response (`true`).
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Subsystem Initialization**:  
+  - Created as an engine subsystem, `ULyraExperienceManager` is typically available once the engine is up.  
+  - Accessed via `GEngine->GetEngineSubsystem<ULyraExperienceManager>()`.
+- **Editor-Only Reference Counting**:  
+  - The plugin management code (`NotifyOfPluginActivation`, `RequestToDeactivatePlugin`) is wrapped in `#if WITH_EDITOR`.  
+  - Ensures that the feature is only active during PIE sessions and doesn’t affect packaged builds.
+
+---
+
+## 7. Example Usage
+```cpp
+#if WITH_EDITOR
+void SomeEditorFunction()
+{
+    // Example plugin URL
+    FString PluginURL = TEXT("MyGameFeaturePluginURL");
+
+    // Acquire usage
+    ULyraExperienceManager::NotifyOfPluginActivation(PluginURL);
+
+    // ...
+
+    // Later, release usage
+    bool bCanDeactivate = ULyraExperienceManager::RequestToDeactivatePlugin(PluginURL);
+    if (bCanDeactivate)
+    {
+        // Actually deactivate the plugin now
+    }
+}
+#endif
+```
+In actual practice, these methods are typically called under the hood by other Lyra classes like `ULyraExperienceManagerComponent`. Direct usage in game code is usually minimal.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Non-Editor Environments**  
+  The reference counting is disabled (does nothing) in a non-editor build. If you rely on it at runtime, your logic won’t be invoked.
+
+- **Multiple PIE Sessions**  
+  Make sure to call `OnPlayInEditorBegun()` when starting a new PIE session so that stale references are not carried over.
+
+- **Missing Plugin URL**  
+  If the plugin URL doesn’t match what `UGameFeaturesSubsystem` expects, reference counting might be incremented but never decremented.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Support Non-Editor Environments**  
+  If desired, the logic could be extended to manage game feature plugin usage in live or shipping builds.
+
+- **More Robust Error Handling**  
+  Currently, the methods use asserts and checks. Production scenarios might require graceful handling if a plugin URL is invalid or not found.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Can I use `NotifyOfPluginActivation` in a packaged game build?  
+**A**: The reference counting code is excluded when `WITH_EDITOR` is not defined, so it effectively won’t do anything in production builds.
+
+**Q**: Does `OnPlayInEditorBegun()` automatically clear all references?  
+**A**: Yes, it calls `GameFeaturePluginRequestCountMap.Empty()` to reset everything at the start of a PIE session.
+
+**Q**: How do these static methods get called in the larger Lyra codebase?  
+**A**: Typically, `ULyraExperienceManagerComponent` or other classes that load game feature plugins call `NotifyOfPluginActivation` and `RequestToDeactivatePlugin` to handle plugin lifecycle in editor builds.
