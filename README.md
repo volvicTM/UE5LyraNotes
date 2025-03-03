@@ -1302,3 +1302,172 @@ In the Unreal Editor, you’d assign `ALyraWorldSettings` as the World Settings 
 
 **Q**: Can I use `ALyraWorldSettings` for a front-end map?  
 **A**: Yes, and if `ForceStandaloneNetMode` is true, you can ensure that PIE runs in standalone mode for a non-game (e.g., main menu) level.
+
+
+
+# ULyraAssetManager
+
+## 1. Class/Struct Name
+**ULyraAssetManager**  
+> A custom `UAssetManager` subclass for loading, managing, and tracking game-specific assets in Lyra. This singleton helps coordinate startup tasks, gameplay data loading, and synchronous asset fetching.
+
+---
+
+## 2. Overview
+`ULyraAssetManager` overrides `UAssetManager` to provide Lyra-specific features such as:
+- Managing global game data (e.g., default pawn, game definitions).
+- Tracking “startup jobs” that run when the game boots (e.g., loading global data assets).
+- Offering synchronous loading utilities (`GetAsset` and `GetSubclass`) for code that needs immediate access to data or classes.
+- Keeping references to loaded assets to prevent them from being garbage-collected.
+
+This class is critical for ensuring the game’s core data is loaded before gameplay begins and for providing utility methods to load assets on demand.
+
+---
+
+## 3. Key Responsibilities / Purpose
+1. **Global Game Data Loading**: Provides methods to retrieve or load critical assets like `ULyraGameData` and `ULyraPawnData`.  
+2. **Startup Jobs**: Maintains and executes a list of tasks (`FLyraAssetManagerStartupJob`) to initialize the game (e.g., setting up gameplay cue managers).  
+3. **Synchronous Asset Access**: Supplies templated methods (`GetAsset`, `GetSubclass`) to force-load assets or blueprint classes if they’re not already loaded.  
+4. **In-Editor and PIE Support**: Handles special loading logic during PIE sessions, ensuring all required data is ready for testing.
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `UAssetManager`.  
+- **Interacts With**:  
+  - `ULyraGameplayCueManager`: Loads always-loaded gameplay cues.  
+  - `ULyraGameData`, `ULyraPawnData`: Holds references to these essential game data assets.  
+  - `UCommonSessionSubsystem`, `ULyraReplaySubsystem`: Indirectly via the data it loads, though not directly in this class.  
+  - `FLyraAssetManagerStartupJob`: Used to define startup tasks with progress tracking.
+
+`ULyraAssetManager` is globally accessible through `GEngine->AssetManager` once the engine is initialized.
+
+---
+
+## 5. Important Members
+
+### Variables
+1. **`LyraGameDataPath`** *(TSoftObjectPtr\<ULyraGameData\>)*  
+   - Points to the global game data asset to be loaded at startup.
+
+2. **`DefaultPawnData`** *(TSoftObjectPtr\<ULyraPawnData\>)*  
+   - The default pawn data to load if none is specified on the player state.
+
+3. **`LoadedAssets`** *(TSet\<TObjectPtr\<const UObject\>\>)*  
+   - A set of assets that have been force-loaded and tracked to prevent garbage collection.
+
+4. **`StartupJobs`** *(TArray\<FLyraAssetManagerStartupJob\>)*  
+   - List of tasks to run during `StartInitialLoading`.  
+   - Each job can have a weight and a callback for partial progress updates.
+
+### Methods
+1. **`static ULyraAssetManager& Get()`**  
+   - Singleton accessor. Returns the global `ULyraAssetManager`. Crashes if not properly set.
+
+2. **`StartInitialLoading()`** *(override)*  
+   - Called by engine at startup. Gathers and executes all startup jobs (loading game data, initializing cues, etc.).  
+
+3. **`SynchronousLoadAsset(const FSoftObjectPath&)`** *(static)*  
+   - Internal utility that uses the Streamable Manager (or `LoadObject`) to load an asset immediately.  
+
+4. **`AddLoadedAsset(const UObject* Asset)`**  
+   - Thread-safe method to add an asset to the `LoadedAssets` set, preventing GC.
+
+5. **`GetGameData()`**, **`GetDefaultPawnData()`**  
+   - Returns references to critical game data. Loads them synchronously if necessary.
+
+6. **Templated methods:**  
+   - **`GetAsset<T>(...)`**  
+   - **`GetSubclass<T>(...)`**  
+   - Provide synchronous retrieval of assets or class references.
+
+7. **`DumpLoadedAssets()`** *(static)*  
+   - Debug console command that logs all assets in `LoadedAssets`.
+
+8. **`DoAllStartupJobs()`**  
+   - Executes each `FLyraAssetManagerStartupJob` in sequence, optionally providing progress updates.
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Initialization**  
+  - The engine sets `GEngine->AssetManager` to this class based on `AssetManagerClassName` in `DefaultEngine.ini`.  
+  - `StartInitialLoading` is then called automatically, running any queued startup jobs (e.g., loading game data assets).
+- **Synchronous Loading**  
+  - Typically discouraged in production for large assets, but used here for guaranteed immediate access.  
+  - For performance, only recommended for small or critical assets (like blueprint classes).
+- **Loaded Asset Tracking**  
+  - `LoadedAssets` set ensures that forcibly loaded assets remain in memory. Make sure to remove or handle them carefully if memory usage is a concern.
+- **Editor Flow**  
+  - In the editor, `PreBeginPIE` is called to perform further loading tasks, ensuring test sessions have the correct data.
+
+---
+
+## 7. Example Usage
+
+```cpp
+// Example: Retrieve default pawn data in game code
+void SomeFunction()
+{
+    const ULyraPawnData* PawnData = ULyraAssetManager::Get().GetDefaultPawnData();
+    if (PawnData)
+    {
+        // Use PawnData for something
+    }
+}
+
+// Example: Synchronously load a custom asset
+TSoftObjectPtr<UStaticMesh> MyMeshPtr = ...; // from some data
+UStaticMesh* MyMesh = ULyraAssetManager::GetAsset(MyMeshPtr, true);
+if (MyMesh)
+{
+    // MyMesh is now loaded and won't be garbage collected
+}
+```
+In practice, developers call these methods anytime they need guaranteed availability of certain data or want to define new startup tasks.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Excessive Synchronous Loads**  
+  Could slow down load times if too many large assets are loaded at once.
+
+- **Failing to Configure `AssetManagerClassName`**  
+  If `ULyraAssetManager` isn’t set in `DefaultEngine.ini`, the engine can’t instantiate it, causing a fatal error.
+
+- **Unscanned Assets**  
+  If a path isn’t known to the asset manager, calls to load or retrieve the asset might fail or return null.
+
+- **Memory Usage**  
+  Adding too many assets to `LoadedAssets` could inflate memory usage unnecessarily.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Refine Startup Job System**  
+  Could include priority or concurrency for certain tasks, or a more robust progress UI.
+
+- **Asynchronous Alternative**  
+  Offer more asynchronous approaches to loading assets so the main thread isn’t blocked.
+
+- **Automated Unloading**  
+  A system to remove references from `LoadedAssets` after certain usage thresholds, preventing indefinite memory usage.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Why does my game crash at startup saying it can’t find `ULyraAssetManager`?  
+**A**: Check that `[/Script/Engine.Engine] AssetManagerClassName=/Script/LyraGame.LyraAssetManager` is set in your `DefaultEngine.ini`.
+
+**Q**: When should I use `GetAsset` vs. normal asynchronous loading?  
+**A**: Use `GetAsset` for small assets or those required immediately at runtime. For bigger content, you might prefer an async approach to avoid blocking.
+
+**Q**: Does the manager automatically unload assets at any point?  
+**A**: Not by default. Assets added to `LoadedAssets` remain in memory until the engine closes or you remove them manually.
+
+**Q**: Can I add my own startup jobs?  
+**A**: Yes, you could modify `ULyraAssetManager` to push additional `FLyraAssetManagerStartupJob` entries before `DoAllStartupJobs()` is called.
+
