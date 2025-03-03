@@ -909,3 +909,137 @@ Most configuration is done within the Unreal Editor by assigning actions in the 
 
 **Q**: Do I need to handle load/unload code manually?  
 **A**: Typically no; once referenced by a `ULyraExperienceDefinition` or a manager system, actions are executed at the correct time. You only need to ensure you’ve set up references properly.
+
+
+
+# UAsyncAction_ExperienceReady
+
+## 1. Class/Struct Name
+**UAsyncAction_ExperienceReady**  
+> A BlueprintAsyncAction that waits for the Lyra experience to finish loading before triggering an event.
+
+---
+
+## 2. Overview
+`UAsyncAction_ExperienceReady` is an asynchronous Blueprint node that monitors the game’s `AGameStateBase` and `ULyraExperienceManagerComponent`. It notifies you (via `OnReady`) when the experience has successfully loaded. This is particularly useful for Blueprint scripts that need to wait until the game’s “experience” is fully set up before running initialization logic.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Async Waiting for Experience**: Ensures that gameplay scripts don’t run until the Lyra experience data is present and fully loaded.  
+- **Blueprint Integration**: Provides a node (`WaitForExperienceReady`) that can be called from Blueprints to handle asynchronous loading cleanly.  
+- **Minimal Overhead**: Automatically self-destructs (`SetReadyToDestroy`) once the event has broadcast, preventing lingering references.
+
+---
+
+## 4. Dependencies & Relationships
+- **Subclass of**: `UBlueprintAsyncActionBase`  
+  - Integrates with Blueprint for asynchronous, latent function calls.
+- **Uses**:
+  - `ULyraExperienceManagerComponent` to check if the experience is loaded.  
+  - `World->GameStateSetEvent` to wait for the `GameState` if it’s not initially ready.
+
+The `OnReady` multicast delegate is broadcast once the experience has finished loading.
+
+---
+
+## 5. Important Members
+
+### Delegate
+- **`FExperienceReadyAsyncDelegate OnReady`**  
+  - A dynamic multicast delegate called once the experience is confirmed ready.
+
+### Functions
+1. **`static UAsyncAction_ExperienceReady* WaitForExperienceReady(UObject* WorldContextObject)`**  
+   - Creates an instance of this async action.  
+   - Internally stores a weak reference to the current `UWorld`.  
+   - Returns the async action object, which you can bind to via Blueprints.
+
+2. **`void Activate()`** *(override)*  
+   - Called after the node is created in Blueprint.  
+   - Checks if there’s a valid `AGameStateBase`; if not, waits for one via `World->GameStateSetEvent`.  
+   - Once `AGameStateBase` is ready, the action listens to the `ULyraExperienceManagerComponent` to determine if the experience is already loaded or not.
+
+### Internal Steps
+- **Step1_HandleGameStateSet**: Called when the engine reports that a `GameState` is available.  
+- **Step2_ListenToExperienceLoading**: Looks up `ULyraExperienceManagerComponent`. If the experience is already loaded, schedule a next-frame callback to broadcast readiness; otherwise, registers a delegate for `OnExperienceLoaded`.  
+- **Step3_HandleExperienceLoaded**: Triggered when `OnExperienceLoaded` fires; then moves on to broadcasting.  
+- **Step4_BroadcastReady**: Broadcasts `OnReady` to all Blueprint listeners, then marks the action ready to destroy.
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Creation**: Typically created in a Blueprint using `WaitForExperienceReady(WorldContext)`.  
+- **Activation**: Once created, `Activate` checks for an existing `GameState`:
+  - If no game state is found yet, it subscribes to `GameStateSetEvent`.
+  - Once it has a `GameState`, it fetches the `ULyraExperienceManagerComponent`.  
+- **Delay a Frame**: Even if the experience is loaded, the action waits one frame (`SetTimerForNextTick`) before broadcasting, ensuring that any dependent logic isn’t instantly triggered in the same frame.  
+- **Self Destruction**: After broadcasting, calls `SetReadyToDestroy()` to free itself.
+
+---
+
+## 7. Example Usage
+
+**Blueprint Example**  
+1. In your Blueprint graph, right-click and search for **Wait for Experience Ready**.  
+2. Connect the **Execute** pin from your event (e.g., `Event BeginPlay`) to **Wait for Experience Ready**.  
+3. On the `OnReady` pin, add logic that relies on the loaded experience.
+
+```cpp
+// C++ snippet illustrating usage:
+void UMyBlueprintFunctionLibrary::StartMyAsyncLogic(UObject* WorldContextObject)
+{
+    UAsyncAction_ExperienceReady* AsyncNode = UAsyncAction_ExperienceReady::WaitForExperienceReady(WorldContextObject);
+    if (AsyncNode)
+    {
+        AsyncNode->OnReady.AddDynamic(this, &UMyBlueprintFunctionLibrary::HandleExperienceReady);
+    }
+}
+
+void UMyBlueprintFunctionLibrary::HandleExperienceReady()
+{
+    // Safe to proceed now, experience is fully loaded
+}
+```
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Null WorldContext**  
+  If `WaitForExperienceReady` is called with an invalid or null context, the action returns `nullptr` and never triggers.
+
+- **GameState Not Yet Spawned**  
+  The node waits for `GameStateSetEvent`. Ensure your game state is properly configured in your `GameMode`.
+
+- **Multiple Wait Nodes**  
+  You can have multiple nodes waiting for the same event; each one will broadcast when ready. Make sure you don’t inadvertently create multiple waiting nodes in the same flow unless intended.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Optional Additional Delays**  
+  The single-frame delay is minimal; advanced usage might want user-defined waiting times.
+
+- **Error Handling**  
+  If the experience fails to load for some reason (e.g., missing plugin), this action might never trigger. It could be extended to handle error states or timeouts.
+
+- **Dynamic Instances**  
+  In larger or more dynamic levels, you may want additional checks for partial loading scenarios.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Does this require a Lyra-style `GameState`?  
+**A**: Yes, it specifically looks for `ULyraExperienceManagerComponent` on the `GameState`. If you’re using a different framework, it won’t function as intended.
+
+**Q**: Why does my callback never fire?  
+**A**: Check that your `GameStateClass` is set to a class containing `ULyraExperienceManagerComponent` and that your “experience” is actually being loaded. If the experience load is skipped, the event won’t broadcast.
+
+**Q**: Can I manually call `OnReady.Broadcast()`?  
+**A**: You shouldn’t. The internal flow triggers `OnReady` at the correct time. Overriding that can break the async node’s lifecycle.
+
+**Q**: Will this node broadcast if I call it after the experience is already loaded?  
+**A**: Yes — if the experience is loaded, it schedules the broadcast for the next tick, ensuring consistent behavior (and not firing immediately within the same frame).
