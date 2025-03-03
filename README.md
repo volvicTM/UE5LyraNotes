@@ -333,3 +333,207 @@ if (LyraGS)
 
 **Q**: Which messaging function should I use if reliability is uncertain?  
 **A**: For ephemeral events (like chat messages or kill feeds), `MulticastMessageToClients` (unreliable) is fine. For important notifications (like game-winning conditions), use `MulticastReliableMessageToClients`.
+
+
+
+# ULyraExperienceManagerComponent
+
+## 1. Class/Struct Name
+**ULyraExperienceManagerComponent**  
+> A `UGameStateComponent` that orchestrates the loading, activation, and unloading of a “Lyra Experience.” Implements `ILoadingProcessInterface` for loading screens.
+
+---
+
+## 2. Overview
+`ULyraExperienceManagerComponent` manages the lifecycle of a given `ULyraExperienceDefinition`, including loading assets and game feature plugins, executing any associated `GameFeatureAction`s, and broadcasting events when the experience is fully operational. It also handles deactivation logic when a level or game session ends.
+
+---
+
+## 3. Key Responsibilities / Purpose
+1. **Load and Configure “Experience” Data**:  
+   - Loads the specified `ULyraExperienceDefinition` and its assets.
+2. **Activate Game Features**:  
+   - Detects which game feature plugins must be enabled for the current experience, and activates them.
+3. **Execute/Deactivate Experience Actions**:  
+   - Runs actions (e.g., registering gameplay tags, spawning custom subsystems) when the experience is activated.
+   - Cleans up those actions during deactivation or end of play.
+4. **Broadcast Experience State**:  
+   - Notifies listeners (via delegates) once the experience is fully loaded (`OnExperienceLoaded*`).
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: 
+  - `UGameStateComponent` (for lifecycle and replication within the game state).
+  - `ILoadingProcessInterface` (to determine loading screen display logic).
+- **References / Uses**:
+  - `ULyraExperienceDefinition`: The asset defining which actions and plugins the experience needs.
+  - `ULyraAssetManager`: For asynchronously loading assets.
+  - `UGameFeaturesSubsystem`: For activating game feature plugins.
+  - `ULyraExperienceActionSet` and `UGameFeatureAction`: Contain the actual operations performed during activation/deactivation.
+
+---
+
+## 5. Important Members
+
+### Enums
+- **`ELyraExperienceLoadState`**  
+  - Tracks the internal state of the component’s load process.  
+  - Values include: `Unloaded`, `Loading`, `LoadingGameFeatures`, `LoadingChaosTestingDelay`, `ExecutingActions`, `Loaded`, `Deactivating`.
+
+### Variables
+1. **`TObjectPtr<const ULyraExperienceDefinition> CurrentExperience`** *(ReplicatedUsing = OnRep_CurrentExperience)*  
+   - Reference to the loaded experience definition.  
+   - Remains `nullptr` until set, then triggers the load sequence.
+
+2. **`ELyraExperienceLoadState LoadState`**  
+   - Tracks the current stage of loading or unloading. Updated as tasks complete.
+
+3. **`TArray<FString> GameFeaturePluginURLs`**  
+   - List of plugin URLs required by the experience. Populated and activated during loading.
+
+4. **`int32 NumGameFeaturePluginsLoading`**  
+   - Counter for how many plugin load operations are currently in progress.
+
+5. **`FOnLyraExperienceLoaded OnExperienceLoaded_HighPriority, OnExperienceLoaded, OnExperienceLoaded_LowPriority`**  
+   - Delegates that fire when the experience completes loading.  
+   - Split into three priority tiers so high-priority systems can process first.
+
+### Methods
+1. **`SetCurrentExperience(FPrimaryAssetId ExperienceId)`**  
+   - Kicks off the loading process for a given experience asset ID.  
+   - Immediately loads the definition from the asset path, checks it, and sets `CurrentExperience`.
+
+2. **`CallOrRegister_OnExperienceLoaded_HighPriority / OnExperienceLoaded / OnExperienceLoaded_LowPriority`**  
+   - Registers or immediately calls delegates that wait for the experience to finish loading.
+
+3. **`GetCurrentExperienceChecked() const`**  
+   - Returns `CurrentExperience` if `LoadState` is `Loaded`.  
+   - Asserts if called too early (i.e., before the experience is fully loaded).
+
+4. **`IsExperienceLoaded() const`**  
+   - Returns `true` if `LoadState` is `Loaded` and `CurrentExperience` is non-null.
+
+5. **`OnRep_CurrentExperience()`** *(UFUNCTION)*  
+   - RepNotify function triggered when `CurrentExperience` changes.  
+   - Calls `StartExperienceLoad()` to begin load sequence on clients.
+
+6. **`StartExperienceLoad()`**  
+   - Internal function that initiates asynchronous loading of the experience assets and sets up the plugin activation steps.
+
+7. **`OnExperienceLoadComplete()`**  
+   - Called when all required assets have finished loading. Proceeds to load/activate the required game feature plugins.
+
+8. **`OnGameFeaturePluginLoadComplete(const UE::GameFeatures::FResult&)`**  
+   - Called each time a single game feature plugin finishes loading/activation.  
+   - When all plugins are done, calls `OnExperienceFullLoadCompleted`.
+
+9. **`OnExperienceFullLoadCompleted()`**  
+   - Finalizes the experience load (execution of actions, broadcasting delegates).  
+   - Also includes an optional “chaos testing delay” for artificially testing load times.
+
+10. **`EndPlay(const EEndPlayReason::Type EndPlayReason) override`**  
+    - Cleans up or deactivates any loaded plugins, calling deactivation methods on relevant actions.
+
+11. **`ShouldShowLoadingScreen(FString& OutReason) const override`**  
+    - Part of `ILoadingProcessInterface`. Returns `true` if the experience is not yet fully loaded.
+
+---
+
+## 6. Implementation Notes & Lifecycle
+1. **Setting the Experience**  
+   - `SetCurrentExperience` is typically called by the game mode or another system with a valid `FPrimaryAssetId`.
+2. **Loading Assets & Plugins**  
+   - Once `CurrentExperience` is assigned, the component transitions through states (`Loading` → `LoadingGameFeatures` → optional chaos delay → `ExecutingActions` → `Loaded`).
+   - Relevant game features are activated using `UGameFeaturesSubsystem::LoadAndActivateGameFeaturePlugin`.
+3. **Chaos Testing Delay**  
+   - Configured via console variables (`lyra.chaos.ExperienceDelayLoad.MinSecs` and `.RandomSecs`). Injects random delays to mimic network or data load variability.
+4. **Actions Execution**  
+   - Experience-based `GameFeatureAction`s are executed in the `ExecutingActions` stage. This can include blueprint or code logic hooking into gameplay systems.
+5. **Unload / EndPlay**  
+   - `EndPlay` triggers deactivation of all loaded game feature plugins and experience actions (though partial support for asynchronous deactivation is noted as incomplete).
+6. **Delegate Order**  
+   - Experience load completion fires three delegates in a specific order:
+     1. `OnExperienceLoaded_HighPriority`
+     2. `OnExperienceLoaded`
+     3. `OnExperienceLoaded_LowPriority`
+
+---
+
+## 7. Example Usage
+
+```cpp
+// In your GameState or GameMode:
+
+void AMyCustomGameState::LoadMyChosenExperience()
+{
+    // Suppose we have an asset ID for the chosen experience
+    FPrimaryAssetId MyExperienceAssetId("LyraExperienceDefinition", "MyCoolExperience");
+
+    ULyraExperienceManagerComponent* ExpManager = FindComponentByClass<ULyraExperienceManagerComponent>();
+    if (ExpManager)
+    {
+        ExpManager->CallOrRegister_OnExperienceLoaded_HighPriority(
+            FOnLyraExperienceLoaded::FDelegate::CreateLambda([](const ULyraExperienceDefinition* LoadedExperience)
+            {
+                UE_LOG(LogTemp, Log, TEXT("Experience loaded (high priority)!"));
+                // Perform any immediate setup or state changes you want.
+            }));
+
+        ExpManager->CallOrRegister_OnExperienceLoaded(
+            FOnLyraExperienceLoaded::FDelegate::CreateLambda([](const ULyraExperienceDefinition* LoadedExperience)
+            {
+                UE_LOG(LogTemp, Log, TEXT("Experience loaded (normal priority)!"));
+                // Normal post-load logic goes here.
+            }));
+
+        ExpManager->SetCurrentExperience(MyExperienceAssetId);
+    }
+}
+```
+In practice, the game mode or another controller typically calls `SetCurrentExperience` to specify which experience to load when the match starts. Other systems can respond by binding delegates.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Calling `GetCurrentExperienceChecked` Too Early**  
+  This will `check` (assert) if called before the experience finishes loading. Use `CallOrRegister_OnExperienceLoaded` to defer logic until safe.
+
+- **Forgetting Plugin Deactivation**  
+  By default, plugins stay active once loaded. `EndPlay` attempts to deactivate them, but partial or asynchronous deactivation is currently limited.
+
+- **Chaotic Testing Delays**  
+  The random delay for testing can cause confusion if not aware; can appear as an unexpected hitch in loading.
+
+- **Asynchronous Deactivation**  
+  The code logs that advanced or partial deactivation is not fully supported. Breaking changes or errors could arise if your actions rely heavily on async teardown.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Robust Error Handling**  
+  The current logic `check`s on failures, but might need graceful fallback for production scenarios.
+
+- **Partial / Ordered Unloading**  
+  The system “leaks” game feature plugins if multiple experiences are loaded sequentially. A more robust approach would unload only the unneeded plugins.
+
+- **Asynchronous Deactivation**  
+  The code has a partial design for asynchronous action teardown but lacks full implementation.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Why is my experience never transitioning to “Loaded”?  
+**A**: Ensure that the asset references and plugin names in `ULyraExperienceDefinition` are valid. Invalid plugin URLs or missing assets can stall the process.
+
+**Q**: Can I load multiple experiences concurrently?  
+**A**: The component is designed around a single `CurrentExperience`. Loading multiple experiences at once would require custom logic or a separate manager for each.
+
+**Q**: What if I want to disable the chaos load delay?  
+**A**: Set console variables `lyra.chaos.ExperienceDelayLoad.MinSecs` and `lyra.chaos.ExperienceDelayLoad.RandomSecs` to 0.
+
+**Q**: Is there a blueprint-friendly way to listen for experience load completion?  
+**A**: Use `CallOrRegister_OnExperienceLoaded` in C++ for best results, or create a blueprint event binding to that delegate. Alternatively, you can override `OnExperienceFullLoadCompleted` in a Blueprint subclass if needed.
