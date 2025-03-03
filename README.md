@@ -1471,3 +1471,124 @@ In practice, developers call these methods anytime they need guaranteed availabi
 **Q**: Can I add my own startup jobs?  
 **A**: Yes, you could modify `ULyraAssetManager` to push additional `FLyraAssetManagerStartupJob` entries before `DoAllStartupJobs()` is called.
 
+
+
+# FLyraAssetManagerStartupJob
+
+## 1. Class/Struct Name
+**FLyraAssetManagerStartupJob**  
+> A lightweight struct that represents a single “startup job” for Lyra’s asset management system, encapsulating a task function, weight (importance), and progress reporting.
+
+---
+
+## 2. Overview
+`FLyraAssetManagerStartupJob` holds metadata and logic for a startup task. These tasks are typically queued by the `ULyraAssetManager` to execute during the game’s initial loading phase. Each job can optionally spawn a `FStreamableHandle` to load assets asynchronously. The struct also provides hooks for reporting partial progress back to any listening system, making it useful for incrementally updating loading screens or logs.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Task Definition**: Bundles a function (`JobFunc`) that performs some asset-loading or initialization work.
+- **Progress Tracking**: Allows partial progress to be reported via `SubstepProgressDelegate`.
+- **Streamable Handle Management**: If the job spawns a `FStreamableHandle`, it can observe and wait for that handle’s completion.
+
+---
+
+## 4. Dependencies & Relationships
+- **Used By**: `ULyraAssetManager` in its `StartupJobs` array.
+- **Relies On**: 
+  - `FStreamableHandle`: Unreal’s handle for asynchronous asset loads.
+  - `FPlatformTime` for time measurements.
+  - `FLyraAssetManagerStartupJobSubstepProgress` delegate to report intermediate progress.
+
+---
+
+## 5. Important Members
+
+1. **`TFunction<void(const FLyraAssetManagerStartupJob&, TSharedPtr<FStreamableHandle>&)> JobFunc`**  
+   - The primary function that performs the job’s work.  
+   - Can optionally produce a `FStreamableHandle` for asynchronous loads.
+
+2. **`FString JobName`**  
+   - A descriptive name used in logs.
+
+3. **`float JobWeight`**  
+   - Relative weight or importance for progress tracking (e.g., a job might be heavier if it loads more assets).
+
+4. **`FLyraAssetManagerStartupJobSubstepProgress SubstepProgressDelegate`**  
+   - Delegate used to update the job’s substep progress.  
+   - Bound externally to, for example, `ULyraAssetManager` for incremental loading progress.
+
+5. **`mutable double LastUpdate`**  
+   - Tracks the last timestamp when substep progress was reported, reducing overhead by limiting frequent calls.
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Job Execution**  
+  - The `DoJob()` method logs the start time, calls `JobFunc`, and, if a handle is created, waits for it to complete.  
+  - The `FStreamableHandle::BindUpdateDelegate` is temporarily set to report incremental progress, then cleared once the handle finishes.
+- **Progress Updates**  
+  - `UpdateSubstepProgress(float NewProgress)` calls the bound delegate directly.  
+  - `UpdateSubstepProgressFromStreamable` checks if enough time (`> 1/60th of a second`) has passed to avoid excessive calls.  
+- **Integration**  
+  - Typically invoked by `ULyraAssetManager::DoAllStartupJobs()`, which runs these in sequence or accumulates progress.
+
+---
+
+## 7. Example Usage
+
+```cpp
+// Creating a startup job in ULyraAssetManager constructor or StartInitialLoading
+StartupJobs.Add(FLyraAssetManagerStartupJob(
+    TEXT("LoadSomeAssets"),
+    [this](const FLyraAssetManagerStartupJob& Job, TSharedPtr<FStreamableHandle>& Handle)
+    {
+        // Example: Use the StreamableManager to load assets asynchronously
+        //   (populate Handle with LoadAsset call if needed)
+    },
+    10.0f // Weighted more heavily
+));
+```
+During the job’s execution, the system might bind a substep delegate that reports progress to a loading screen or debug log.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Never Creating a `FStreamableHandle`**  
+  If `JobFunc` doesn’t create a handle, `DoJob()` will simply run synchronously. That’s fine if the job doesn’t actually load assets.
+
+- **Excessive Update Frequency**  
+  The `LastUpdate` check prevents flooding calls to `UpdateSubstepProgressFromStreamable`. Otherwise, it could degrade performance.
+
+- **Inconsistent Weight**  
+  If `JobWeight` is too large or too small relative to others, the UI might display misleading load percentages.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Parallel Job Execution**  
+  Currently, `DoJob()` is synchronous. Might explore concurrency or partial overlap of job tasks.
+
+- **Better Time-Based Throttling**  
+  Provide a user-configurable threshold for how frequently to update the substep progress.
+
+- **Error Handling**  
+  If an asset fails to load, `JobFunc` might want to handle or log that in a user-friendly way.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Do I have to always return a `FStreamableHandle` from `JobFunc`?  
+**A**: No, if your job doesn’t involve asynchronous asset loading, it can run synchronously and set `Handle` to `nullptr`.
+
+**Q**: How often can substep progress be updated?  
+**A**: Default logic only updates once every ~1/60th of a second. You can adjust or remove this check if needed.
+
+**Q**: What if I need multiple tasks in a single job?  
+**A**: You can implement that logic within `JobFunc`, potentially chaining multiple handle loads or tasks before returning.
+
+**Q**: Is the `JobWeight` mandatory?  
+**A**: The system uses it to calculate relative progress if there are multiple jobs. You can set it to `1.0f` or any value that makes sense in your progress scale.
