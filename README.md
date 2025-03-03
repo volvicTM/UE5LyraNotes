@@ -1043,3 +1043,149 @@ void UMyBlueprintFunctionLibrary::HandleExperienceReady()
 
 **Q**: Will this node broadcast if I call it after the experience is already loaded?  
 **A**: Yes — if the experience is loaded, it schedules the broadcast for the next tick, ensuring consistent behavior (and not firing immediately within the same frame).
+
+
+
+# ULyraUserFacingExperienceDefinition
+
+## 1. Class/Struct Name
+**ULyraUserFacingExperienceDefinition**  
+> A `UPrimaryDataAsset` defining user-facing details for a Lyra experience, such as map selection, extra URL options, session settings, and UI elements.
+
+---
+
+## 2. Overview
+`ULyraUserFacingExperienceDefinition` allows you to configure and present a game “experience” to players. It contains metadata like the map to load, the underlying `LyraExperienceDefinition` to use, UI text and icons, and session hosting parameters (like max players). This makes it straightforward to create distinct “front-end” entries for experiences, each with unique visuals and session properties.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **User-Facing Configuration**: Defines how the experience is displayed (title, icon, description) and whether it’s shown in the front-end experience list.
+- **Session Hosting Settings**: Includes map asset, additional URL arguments, max player count, replay recording, etc.
+- **Default/Preferred Experiences**: Identifies default experiences for quick play or priority in UI.
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `UPrimaryDataAsset` (enables referencing this class as a data-driven asset).
+- **References / Uses**:  
+  - `UCommonSession_HostSessionRequest`: Used to create a host session request with the specified settings.  
+  - `FPrimaryAssetId`: Points to both the map (`MapID`) and the main Lyra experience definition (`ExperienceID`).
+  - `ULyraReplaySubsystem` and `UCommonSessionSubsystem`: For replay support and session creation logic.
+
+---
+
+## 5. Important Members
+
+1. **`FPrimaryAssetId MapID`**  
+   - Identifies the map asset to load.  
+   - Must be tagged as `"Map"` in the asset registry.
+
+2. **`FPrimaryAssetId ExperienceID`**  
+   - Specifies which `LyraExperienceDefinition` to use.  
+   - Must match the `LyraExperienceDefinition` asset type in the project.
+
+3. **`TMap<FString, FString> ExtraArgs`**  
+   - Key-value pairs for additional URL options (e.g., `?param=value`).
+
+4. **UI Fields**  
+   - `FText TileTitle`, `FText TileSubTitle`, `FText TileDescription`, `TObjectPtr<UTexture2D> TileIcon`  
+   - Used for displaying this experience’s title, subtitle, descriptive text, and icon in the front-end UI.
+
+5. **`TSoftClassPtr<UUserWidget> LoadingScreenWidget`**  
+   - Optional widget class to show as a loading screen when transitioning to or from this experience.
+
+6. **`bool bIsDefaultExperience`**  
+   - If true, this experience is given priority for quick-play or other default behaviors.
+
+7. **`bool bShowInFrontEnd`**  
+   - If true, the experience is visible in the front-end experiences list (e.g., main menu selection).
+
+8. **`bool bRecordReplay`**  
+   - If true and the platform supports replays, a replay will be recorded during the session.
+
+9. **`int32 MaxPlayerCount`**  
+   - The maximum number of players that can join a session hosted with this experience.
+
+10. **`UFUNCTION CreateHostingRequest(const UObject* WorldContextObject) const`**  
+    - Generates a `UCommonSession_HostSessionRequest` prepopulated with the above settings (`MapID`, `ExtraArgs`, `MaxPlayerCount`, etc.).
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Data Asset Configuration**: Typically set in the Unreal Editor, where you assign map assets, text, icons, and the experience ID.
+- **Session Creation**  
+  - `CreateHostingRequest` is the main entry point when hosting a match using these user-facing settings.  
+  - If the `UCommonSessionSubsystem` is available, the new session request is configured for the relevant online mode, presence, and optionally replay recording.
+- **Replay Support**  
+  - Conditioned on `ULyraReplaySubsystem::DoesPlatformSupportReplays()`; if supported, the code sets `DemoRec` to enable replay recording if `bRecordReplay` is `true`.
+- **Priority / Default Experience**  
+  - The `bIsDefaultExperience` flag might be used by the front-end to place this experience at the top of a playlist or quick-play option.
+- **Asset ID Requirements**  
+  - `MapID` and `ExperienceID` must be valid primary assets, typically assigned in the editor’s asset reference fields.
+
+---
+
+## 7. Example Usage
+
+```cpp
+// Example usage in some session hosting logic:
+ULyraUserFacingExperienceDefinition* MyUserFacingExp = LoadObject<ULyraUserFacingExperienceDefinition>(nullptr, TEXT("/Game/Experiences/Exp_Foo.Exp_Foo"));
+if (MyUserFacingExp)
+{
+    // Build a host session request:
+    UCommonSession_HostSessionRequest* HostRequest = MyUserFacingExp->CreateHostingRequest(WorldContextObject);
+    if (HostRequest)
+    {
+        // Now pass HostRequest to the session subsystem for hosting
+        UCommonSessionSubsystem* SessionSubsystem = GameInstance->GetSubsystem<UCommonSessionSubsystem>();
+        if (SessionSubsystem)
+        {
+            SessionSubsystem->HostSession(nullptr, HostRequest);
+        }
+    }
+}
+```
+In Blueprint, you’d typically reference the `ULyraUserFacingExperienceDefinition` asset in UI code or a game mode object, then call `CreateHostingRequest` when the player selects “Play.”
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Invalid `ExperienceID` or `MapID`**  
+  If these asset IDs don’t point to real assets, the session might fail to load or produce errors at runtime.
+
+- **Replay Incompatibility**  
+  Setting `bRecordReplay` to true on platforms without replay support has no effect. Check `ULyraReplaySubsystem::DoesPlatformSupportReplays()`.
+
+- **Session Subsystem Unavailable**  
+  If `UCommonSessionSubsystem` isn’t present or fails to create the request, the function falls back to creating a standalone `UCommonSession_HostSessionRequest`.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Dynamic UI Updates**  
+  Could add logic to dynamically adjust the text or icon based on current game state or external data.
+
+- **Validation**  
+  More robust checks for whether `MapID` and `ExperienceID` are valid, potentially warning the user if references are missing.
+
+- **Extended Hosting Options**  
+  Possibly add more configuration fields (voice chat, matchmaking regions, etc.) to tailor the session request further.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: How do I ensure my map loads properly?  
+**A**: Verify that `MapID` points to a valid map asset and that the map is marked as “Map” in the asset registry.
+
+**Q**: Can I override the loading screen widget at runtime?  
+**A**: You can set `LoadingScreenWidget` in the data asset, but to change it at runtime, you’d likely need a specialized approach (e.g., override in code or modify the data at runtime).
+
+**Q**: Why is my experience not listed in the front-end?  
+**A**: Check if `bShowInFrontEnd` is true. Also ensure your UI system or front-end logic enumerates and displays these experience assets.
+
+**Q**: Do I need a dedicated server for these settings?  
+**A**: Not necessarily. If you’re hosting a listen server, the request is still valid. Dedicated servers often override certain fields like `bUsePresence`.
