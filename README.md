@@ -148,7 +148,7 @@ if (CurrentGameMode)
 // Typical usage occurs automatically; you just set ALyraGameMode as your game mode
 // and rely on the built-in spawn logic and experience assignment.
 In many cases, you’d configure `ALyraGameMode` in your project `.ini` files or level overrides, and the rest is handled by the Lyra framework.
-'''
+```
 ---
 
 ### 8. Common Pitfalls & Edge Cases
