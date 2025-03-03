@@ -1189,3 +1189,116 @@ In Blueprint, you’d typically reference the `ULyraUserFacingExperienceDefiniti
 
 **Q**: Do I need a dedicated server for these settings?  
 **A**: Not necessarily. If you’re hosting a listen server, the request is still valid. Dedicated servers often override certain fields like `bUsePresence`.
+
+
+
+# ALyraWorldSettings
+
+## 1. Class/Struct Name
+**ALyraWorldSettings**  
+> A custom `AWorldSettings` subclass that specifies the default Lyra experience to load when a server opens the map.
+
+---
+
+## 2. Overview
+`ALyraWorldSettings` serves as a specialized world settings class in the Lyra project. It allows map designers or developers to designate a “default gameplay experience” (i.e., a `ULyraExperienceDefinition`) that the server will use when loading this particular map, unless overridden by a user-facing experience selection. It can also force standalone mode in Play-In-Editor (PIE) scenarios for front-end or menu levels.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Default Experience Selection**: Defines which experience (`ULyraExperienceDefinition`) should be loaded when the map starts, if no other experience is specified externally.
+- **Editor Configuration**: In PIE, can force standalone network mode for front-end levels or similar single-player scenarios.
+- **Validation**: Provides error logging and checks (in editor builds) to ensure correct usage (e.g., warns if using a basic `APlayerStart` instead of a `ALyraPlayerStart`).
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `AWorldSettings`, which holds level-specific settings in Unreal.
+- **References**:
+  - `ULyraExperienceDefinition`: The default experience for gameplay if no user-facing experience overrides it.
+  - `APlayerStart` vs. `ALyraPlayerStart`: Editor warnings are emitted if the map uses a generic `APlayerStart` rather than the Lyra-specific variant.
+
+The settings are typically read by `ALyraGameMode` (or similar classes) to determine which experience to load automatically.
+
+---
+
+## 5. Important Members
+
+1. **`TSoftClassPtr<ULyraExperienceDefinition> DefaultGameplayExperience`**  
+   - Soft reference to the default experience asset.  
+   - Resolved at runtime into a valid `ULyraExperienceDefinition`.  
+   - If it fails to resolve, a warning is logged.
+
+2. **`bool ForceStandaloneNetMode`** *(Editor-only)*  
+   - Forces the map to run in standalone mode when using PIE if `true`.  
+   - Useful for front-end menus or levels where multiplayer logic isn’t required.
+
+### Methods
+1. **`FPrimaryAssetId GetDefaultGameplayExperience() const`**  
+   - Returns a valid asset ID for the experience, if it’s specified and can be resolved.  
+   - Logs an error if the path can’t be resolved to a valid asset.
+
+2. **`void CheckForErrors() override`** *(Editor-only)*  
+   - Overrides the standard map check to warn about using a normal `APlayerStart` instead of `ALyraPlayerStart`.  
+   - Also intended to handle potential issues with the `DefaultGameplayExperience` reference (e.g., unscanned directories).
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Construction**: Created automatically when a level with this world settings is loaded.  
+- **Editor-Only Checks**: `CheckForErrors()` runs in the editor to detect potential setup issues (e.g., spawning points or asset references).  
+- **Experience Resolution**: The `GetDefaultGameplayExperience()` method uses `UAssetManager::Get().GetPrimaryAssetIdForPath(...)` to translate the soft class path to a `FPrimaryAssetId`. If unsuccessful, a log entry is created.
+
+---
+
+## 7. Example Usage
+
+```cpp
+// When launching a server for a given map, something like ALyraGameMode might do:
+ALyraWorldSettings* LyraWS = Cast<ALyraWorldSettings>(World->GetWorldSettings());
+if (LyraWS)
+{
+    FPrimaryAssetId ExperienceId = LyraWS->GetDefaultGameplayExperience();
+    // If ExperienceId is valid, use it to load the default experience
+}
+```
+In the Unreal Editor, you’d assign `ALyraWorldSettings` as the World Settings for your map, then set `DefaultGameplayExperience` in the details panel.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Unresolved `DefaultGameplayExperience`**  
+  If the asset path is invalid or not included in asset scanning rules, `GetDefaultGameplayExperience()` returns an invalid ID and logs an error.
+
+- **`APlayerStart` vs. `ALyraPlayerStart`**  
+  Using the default `APlayerStart` spawns an editor warning. Switching to `ALyraPlayerStart` ensures you leverage Lyra’s extended spawn logic.
+
+- **Forgetting to Use `ALyraWorldSettings`**  
+  If the level uses standard `AWorldSettings`, the default experience logic might be skipped entirely.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Extended Editor Tools**  
+  Could automatically replace `APlayerStart` with `ALyraPlayerStart` or provide a “Fix Now” button.
+
+- **More Detailed Validation**  
+  Checking other aspects like lighting settings, collision channels, or specific gameplay assets could be beneficial for large-scale projects.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Do I have to set `ALyraWorldSettings` for every level?  
+**A**: If you want to define a unique default experience for each level, yes. Otherwise, a global fallback is used if no level-specific experience is found.
+
+**Q**: I keep getting a warning about “unable to resolve an asset ID” — what does that mean?  
+**A**: Ensure the path in `DefaultGameplayExperience` points to a valid `ULyraExperienceDefinition`. Check that the asset is part of an asset directory scanned by the `UAssetManager`.
+
+**Q**: What happens if multiple experiences are specified for a single map?  
+**A**: Typically, only the `DefaultGameplayExperience` is used unless overridden by a user-facing experience. The engine doesn’t natively merge them.
+
+**Q**: Can I use `ALyraWorldSettings` for a front-end map?  
+**A**: Yes, and if `ForceStandaloneNetMode` is true, you can ensure that PIE runs in standalone mode for a non-game (e.g., main menu) level.
