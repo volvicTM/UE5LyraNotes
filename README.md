@@ -663,3 +663,134 @@ In actual practice, these methods are typically called under the hood by other L
 
 **Q**: How do these static methods get called in the larger Lyra codebase?  
 **A**: Typically, `ULyraExperienceManagerComponent` or other classes that load game feature plugins call `NotifyOfPluginActivation` and `RequestToDeactivatePlugin` to handle plugin lifecycle in editor builds.
+
+
+
+# ULyraExperienceDefinition
+
+## 1. Class/Struct Name
+**ULyraExperienceDefinition**  
+> A `UPrimaryDataAsset` that describes an entire “Lyra Experience.” It defines which plugins to activate, a default pawn, and a collection of “actions” (game feature actions or action sets) to execute for that experience.
+
+---
+
+## 2. Overview
+`ULyraExperienceDefinition` is central to how Lyra structures “experiences.” An experience typically encapsulates a set of features, gameplay elements, and default data (e.g., pawn class) required for a particular game mode or scenario. This asset can:
+- Reference additional game features that should be activated (via plugin URLs).
+- Provide a default pawn data to ensure players have the correct character setup.
+- Aggregate multiple `UGameFeatureAction`s and `ULyraExperienceActionSet`s to perform specific tasks on load or unload.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Define a Set of Game Features**: Lists the plugin names/URLs that should be enabled for this experience.
+- **Specify the Default Pawn Data**: Establishes which pawn data class (e.g., `ULyraPawnData`) is used when no custom pawn data is specified.
+- **Load/Unload Actions**: Contains `UGameFeatureAction`s and child `ULyraExperienceActionSet`s that define actions to perform throughout the game’s lifecycle.
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `UPrimaryDataAsset` — enabling asynchronous loading and grouping of content.
+- **References**:
+  - `UGameFeatureAction`: Defines logic for loading, registering, and unloading features.
+  - `ULyraExperienceActionSet`: Bundles actions and can further reference additional plugins.
+
+This asset is typically used by the `ULyraExperienceManagerComponent`, which triggers loading and unloading of the defined features at runtime.
+
+---
+
+## 5. Important Members
+
+1. **`TArray<FString> GameFeaturesToEnable`**  
+   - List of plugin names/URLs that this experience requires.  
+   - The manager will load and activate these plugins so the experience works as intended.
+
+2. **`TObjectPtr<const ULyraPawnData> DefaultPawnData`**  
+   - A pointer to the default pawn data.  
+   - Provides a baseline pawn class and associated attributes if no custom pawn data is specified in other gameplay logic.
+
+3. **`TArray<TObjectPtr<UGameFeatureAction>> Actions`**  
+   - Instanced actions that execute code or blueprint logic upon load/unload.  
+   - Each action can add functionality such as registering gameplay tags, spawning managers, or handling UI setup.
+
+4. **`TArray<TObjectPtr<ULyraExperienceActionSet>> ActionSets`**  
+   - An array of additional `ULyraExperienceActionSet` assets that group multiple actions.  
+   - Encourages composition rather than deep inheritance.
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Data Validation**  
+  - Overrides `IsDataValid` to ensure that each action is valid. If there’s a null entry, it’s flagged as invalid.  
+  - Ensures that deep blueprint inheritance (e.g., blueprint subclasses of blueprint subclasses) is not currently supported; the system encourages composition instead.
+- **Asset Bundles**  
+  - Overrides `UpdateAssetBundleData` to incorporate any extra assets from `UGameFeatureAction`s.  
+  - Helps with efficient loading/unloading in the `ULyraAssetManager`.
+- **Editor vs. Runtime**  
+  - At design time, you set up `ULyraExperienceDefinition` via the editor, referencing the required plugins and actions.  
+  - At runtime, something like `ULyraExperienceManagerComponent` will set this as the current experience and begin the load process.
+
+---
+
+## 7. Example Usage
+
+```cpp
+// Pseudocode: Setting up a ULyraExperienceDefinition object in the editor
+
+ULyraExperienceDefinition* MyExperience = NewObject<ULyraExperienceDefinition>();
+MyExperience->GameFeaturesToEnable.Add("SomePluginURL");
+MyExperience->DefaultPawnData = MyPawnDataAsset; // e.g., a reference to a ULyraPawnData
+
+// Suppose we have some GameFeatureAction that spawns a special UI
+UGameFeatureAction* ActionUI = NewObject<UGameFeatureAction>();
+MyExperience->Actions.Add(ActionUI);
+
+// Or we can add an ActionSet that references multiple actions
+MyExperience->ActionSets.Add(MyActionSetReference);
+
+// Once this is saved and assigned to an FPrimaryAssetId, the ULyraExperienceManagerComponent
+// can load it, enabling the plugin and triggering these actions at runtime.
+```
+In practice, these references are usually established in the Unreal Editor UI rather than in code.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Null Actions**  
+  If an entry in `Actions` is null, data validation fails.
+
+- **Blueprint Inheritance**  
+  The class checks if it has multiple blueprint layers. If so, the data validation warns to prefer composition via `ActionSets` instead of deep blueprint subclassing.
+
+- **Incorrect Plugin Names**  
+  Typos in `GameFeaturesToEnable` will cause the plugin load step to fail silently or produce warnings, potentially halting the experience load process.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Support for Partial Overriding**  
+  Currently, you can’t “override” only certain aspects of an experience without duplicating the entire asset or using `ActionSets`.
+
+- **Additional Validation**  
+  More robust checks for plugin URLs or asset references to catch errors earlier.
+
+- **Enhanced Editor UI**  
+  Tools to easily link `GameFeatureActions` and preview their impact could improve user experience.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Can I load multiple experiences at once?  
+**A**: Typically, only one experience is active at a time in Lyra. If you need more, you must manage the merges or load multiple definitions with custom logic.
+
+**Q**: Why does my blueprint-subclassed `ULyraExperienceDefinition` give a warning?  
+**A**: The system discourages multi-level blueprint inheritance. Check for a blueprint parent class that is already a subclass of `ULyraExperienceDefinition` and consider using `ActionSets` instead.
+
+**Q**: What happens if `DefaultPawnData` is null?  
+**A**: Lyra logic may fall back to a global default pawn data. However, this can lead to unexpected behavior if the experience expects a specific pawn class.
+
+**Q**: Why won’t my new plugin load when the experience starts?  
+**A**: Ensure the plugin name in `GameFeaturesToEnable` matches exactly what `UGameFeaturesSubsystem` expects. Typos or missing plugin definitions will prevent loading.
