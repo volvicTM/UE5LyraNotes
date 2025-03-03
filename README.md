@@ -794,3 +794,118 @@ In practice, these references are usually established in the Unreal Editor UI ra
 
 **Q**: Why won’t my new plugin load when the experience starts?  
 **A**: Ensure the plugin name in `GameFeaturesToEnable` matches exactly what `UGameFeaturesSubsystem` expects. Typos or missing plugin definitions will prevent loading.
+
+
+
+# ULyraExperienceActionSet
+
+## 1. Class/Struct Name
+**ULyraExperienceActionSet**  
+> A `UPrimaryDataAsset` that groups together a set of `UGameFeatureAction` objects and optional game feature plugins to enable, typically as part of an overall “experience.”
+
+---
+
+## 2. Overview
+`ULyraExperienceActionSet` is an asset designed to bundle multiple actions (and potential plugin dependencies) into a single collection. You can reference these action sets within a `ULyraExperienceDefinition` (or other assets) to compose gameplay functionality without needing deep inheritance. This facilitates modular design, letting you mix and match sets of actions to create different experiences.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Action Bundling**: Holds an array of `UGameFeatureAction` instances that should execute when loaded.  
+- **Optional Plugin Dependencies**: Can specify a list of game feature plugin names/URLs to ensure certain functionalities are active.  
+- **Composition Over Inheritance**: Encourages reusing sets of actions across multiple experiences without creating multiple blueprint subclasses.
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `UPrimaryDataAsset`, enabling asynchronous loading and data bundling support.
+- **References**:
+  - `UGameFeatureAction`: The actions to perform (e.g., registering game tags, spawning managers, hooking up UI).  
+  - Other code or assets can read `GameFeaturesToEnable` to load the required plugins.
+
+`ULyraExperienceActionSet` is often referenced by `ULyraExperienceDefinition` but can be used anywhere action sets are beneficial.
+
+---
+
+## 5. Important Members
+
+1. **`TArray<TObjectPtr<UGameFeatureAction>> Actions`**  
+   - Holds the instanced actions that run when the asset is loaded.  
+   - Typically includes logic for enabling UI elements, gameplay systems, or other per-experience features.
+
+2. **`TArray<FString> GameFeaturesToEnable`**  
+   - Additional game feature plugins (by name/URL) that the set depends on.  
+   - Helps ensure these plugins are loaded so the relevant actions can execute without missing dependencies.
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Data Validation**  
+  - The class checks each entry in `Actions`; if any are null, it marks the asset as invalid.  
+  - Helps catch missing references early.
+- **Editor-Only Asset Bundles**  
+  - `UpdateAssetBundleData` lets the asset manager know about extra assets each `UGameFeatureAction` needs. This improves load/unload handling.
+- **Composition**  
+  - `ULyraExperienceActionSet` can be reused across multiple experiences by being added to the `ActionSets` array in `ULyraExperienceDefinition`. This approach avoids deep or repeated blueprint inheritance.
+
+---
+
+## 7. Example Usage
+
+```cpp
+// Example: Creating/setting up an ActionSet in C++ (though typically done in the Editor):
+
+ULyraExperienceActionSet* MyActionSet = NewObject<ULyraExperienceActionSet>();
+MyActionSet->GameFeaturesToEnable.Add("MyPluginURL");
+
+// Add an action:
+UGameFeatureAction* SomeAction = NewObject<UGameFeatureAction>();
+MyActionSet->Actions.Add(SomeAction);
+
+// Later, reference MyActionSet in a ULyraExperienceDefinition or other system:
+ULyraExperienceDefinition* MyExperience = NewObject<ULyraExperienceDefinition>();
+MyExperience->ActionSets.Add(MyActionSet);
+```
+Most configuration is done within the Unreal Editor by assigning actions in the asset details panel.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Null Actions**  
+  If an entry in `Actions` is null, data validation fails and logs an error.
+
+- **Mismatched Plugin Names**  
+  Values in `GameFeaturesToEnable` must match what the `UGameFeaturesSubsystem` expects; typos or incorrect names prevent those plugins from loading.
+
+- **Asset vs. Code**  
+  While you can create and manage `ULyraExperienceActionSet` in code, it’s typical to define these sets as assets in the editor for easy reuse.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Advanced Dependency Management**  
+  Could potentially track which `UGameFeatureAction` depends on which plugin, allowing partial loading/unloading per action.
+
+- **Extended Validation**  
+  Checking if plugin names in `GameFeaturesToEnable` actually exist or if actions are compatible might prevent runtime errors.
+
+- **Blueprint Support**  
+  Currently marked as `NotBlueprintable`; that’s intentional, but some teams might want to extend it with blueprint logic for custom use cases.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Why do I see an error about a null action entry?  
+**A**: One of the elements in `Actions` is null. Remove or replace it with a valid `UGameFeatureAction` reference.
+
+**Q**: Are `GameFeaturesToEnable` automatically loaded?  
+**A**: Generally, an external system (e.g., `ULyraExperienceManagerComponent`) picks these up and handles the plugin loading sequence. Make sure you have the correct references or plugin names.
+
+**Q**: Can I nest multiple action sets?  
+**A**: Indirectly, yes — you can embed multiple `ULyraExperienceActionSet` assets in your `ULyraExperienceDefinition`, but you don’t typically embed an `ActionSet` inside another `ActionSet`.
+
+**Q**: Do I need to handle load/unload code manually?  
+**A**: Typically no; once referenced by a `ULyraExperienceDefinition` or a manager system, actions are executed at the correct time. You only need to ensure you’ve set up references properly.
