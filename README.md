@@ -1594,3 +1594,154 @@ During the job’s execution, the system might bind a substep delegate that repo
 
 **Q**: Is the `JobWeight` mandatory?  
 **A**: The system uses it to calculate relative progress if there are multiple jobs. You can set it to `1.0f` or any value that makes sense in your progress scale.
+
+
+
+# ULyraPlayerSpawningManagerComponent
+
+## 1. Class/Struct Name
+**ULyraPlayerSpawningManagerComponent**  
+> A `UGameStateComponent` that centralizes player spawn logic in the Lyra framework. It is typically used by the `ALyraGameMode` to choose suitable spawn points for players (and bots) and to manage respawns.
+
+---
+
+## 2. Overview
+`ULyraPlayerSpawningManagerComponent` is an optional but specialized component you attach to the game state. It handles critical tasks such as finding unoccupied spawn points, deciding which `APlayerStart` to use, and signaling the completion of a player’s respawn. By delegating spawn management to this component, the Lyra project can more easily customize or override how players enter and re-enter the game.
+
+---
+
+## 3. Key Responsibilities / Purpose
+- **Spawn Point Selection**: Determines which `APlayerStart` (or `ALyraPlayerStart`) a given `AController` should occupy.
+- **Respawn Logic**: Provides a mechanism for checking whether a player can restart and performing the final steps of spawning a new pawn.
+- **Cached Player Starts**: Maintains a list (`CachedPlayerStarts`) of available `ALyraPlayerStart` objects in the world, automatically updated when levels or player start actors are added.
+
+---
+
+## 4. Dependencies & Relationships
+- **Inherits From**: `UGameStateComponent`, meaning it’s attached to `ALyraGameState` (or a subclass) and initialized with the game state.
+- **Interacts With**:
+  - `ALyraGameMode`: Calls into this component for `ChoosePlayerStart`, `ControllerCanRestart`, `FinishRestartPlayer`.
+  - `ALyraPlayerStart`: Specialized start actor with additional logic for occupancy, claiming spawn points, etc.
+  - Standard Unreal classes: `AController`, `APlayerStart`, `APlayerState`.
+
+In a typical Lyra flow, the game mode routes spawning calls to this component to unify and override standard UE5 spawn logic.
+
+---
+
+## 5. Important Members
+
+1. **`TArray<TWeakObjectPtr<ALyraPlayerStart>> CachedPlayerStarts`** *(Transient)*  
+   - Holds references to all `ALyraPlayerStart` actors found in the current world.  
+   - Updated when levels load or new player starts spawn.
+
+2. **Private Helper Methods**  
+   - `ChoosePlayerStart(AController* Player)`: Called by `ALyraGameMode`; picks or creates a spawn point for the given controller.  
+   - `ControllerCanRestart(AController* Player)`: Determines if the specified controller is eligible to respawn.  
+   - `FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation)`: Finalizes the process (including blueprint event `K2_OnFinishRestartPlayer`).  
+   - `GetFirstRandomUnoccupiedPlayerStart(AController* Controller, const TArray<ALyraPlayerStart*>& FoundStartPoints) const`: Finds a random unoccupied (or partially occupied) spawn point if no specialized logic applies.
+
+3. **Protected Virtual Methods**  
+   - `AActor* OnChoosePlayerStart(AController* Player, TArray<ALyraPlayerStart*>& PlayerStarts)`: Can be overridden by subclasses (or via blueprint) to define custom logic for selecting a player start.  
+   - `void OnFinishRestartPlayer(AController* Player, const FRotator& StartRotation)`: Overridable function for additional behavior when a restart completes.
+
+4. **Editor-Only Helpers**  
+   - `APlayerStart* FindPlayFromHereStart(AController* Player)`: In PIE, finds an `APlayerStartPIE` if the user selected “Play From Here.”
+
+---
+
+## 6. Implementation Notes & Lifecycle
+- **Initialization**  
+  - In `InitializeComponent`, it subscribes to `LevelAddedToWorld` and `OnActorSpawned` to maintain `CachedPlayerStarts`.  
+- **Spawn Flow**:  
+  1. **`ChoosePlayerStart`** is called (from game mode) → Possibly detect “Play From Here” in PIE or gather `CachedPlayerStarts`.  
+  2. Optionally calls `OnChoosePlayerStart(Player, StarterPoints)` if subclasses want advanced logic.  
+  3. Defaults to a random unoccupied (or partially occupied) start if none is chosen.  
+  4. Marks the chosen `ALyraPlayerStart` as claimed for that controller.  
+- **Respawn Flow**:  
+  1. The game mode queries `ControllerCanRestart(Player)` to check if allowed.  
+  2. The game mode spawns the pawn and calls `FinishRestartPlayer(NewPlayer, StartRotation)`.  
+  3. `FinishRestartPlayer` triggers the blueprint event `K2_OnFinishRestartPlayer` and the C++ method `OnFinishRestartPlayer`.  
+- **Editor-Specific**:  
+  - If `APlayerStartPIE` is present, that takes precedence for an editor session “Play From Here.”
+
+---
+
+## 7. Example Usage
+
+**C++ Example**  
+```cpp
+// Typically, you don't call these directly; they're invoked via ALyraGameMode
+
+ULyraPlayerSpawningManagerComponent* SpawnMgr = GameState->FindComponentByClass<ULyraPlayerSpawningManagerComponent>();
+if (SpawnMgr)
+{
+    AController* SomeController = ...;
+    if (SpawnMgr->ControllerCanRestart(SomeController))
+    {
+        // Logic in ALyraGameMode calls SpawnMgr->ChoosePlayerStart(SomeController) to pick an ALyraPlayerStart
+        // Then eventually calls SpawnMgr->FinishRestartPlayer(SomeController, StartRotation)
+    }
+}
+
+// Subclass example:
+class UMySpawningManager : public ULyraPlayerSpawningManagerComponent
+{
+protected:
+    virtual AActor* OnChoosePlayerStart(AController* Player, TArray<ALyraPlayerStart*>& PlayerStarts) override
+    {
+        // Custom logic: pick a specific spawn based on team, etc.
+        // Return nullptr to fallback on the default random logic
+        return nullptr;
+    }
+};
+```
+### Blueprint Example
+
+You might subclass `ULyraPlayerSpawningManagerComponent` in C++ and expose blueprint logic.  
+`OnFinishRestartPlayer` and `K2_OnFinishRestartPlayer` can be used to run custom events when a player or bot finishes respawning.
+
+---
+
+### 8. Common Pitfalls & Edge Cases
+
+- **Forgetting to use `ALyraPlayerStart`**  
+  The code specifically caches `ALyraPlayerStart` objects. Generic `APlayerStart` might not have the same occupancy logic.
+
+- **PIE “Play From Here”**  
+  Always spawns from `APlayerStartPIE`, ignoring normal start points. This can be confusing if your spawn logic isn’t triggered in the editor.
+
+- **Null or Stale `CachedPlayerStarts` Entries**  
+  The array uses `TWeakObjectPtr`; if a start is destroyed, you need to ensure iteration removes stale pointers. The code does handle this, but keep it in mind.
+
+- **Controller vs. Spectator**  
+  The code checks if `IsOnlyASpectator()` to skip certain logic. Make sure your spectator flow is accounted for.
+
+---
+
+### 9. Future Improvements or TODOs
+
+- **Advanced Team-Based Spawn Logic**  
+  The `OnChoosePlayerStart` could be expanded to handle teams or game modes with specialized spawn rules.
+
+- **Zone or Wave Spawning**  
+  Optionally support a wave-based spawn system or dynamic rules (e.g., a safe zone).
+
+- **Enhanced Occupancy Checking**  
+  `Partial` occupancy is recognized but you could further refine logic to handle multiple partial claim states.
+
+---
+
+### 10. FAQs / Troubleshooting
+
+**Q**: Why isn’t my custom spawn logic running?  
+**A**: Ensure your component is attached to the correct `GameState`, and that you’re not overriding spawn logic in the game mode in a conflicting way. Also confirm `OnChoosePlayerStart` or other methods aren’t returning `nullptr` inadvertently.
+
+**Q**: Do I need to override `OnChoosePlayerStart`?  
+**A**: Not necessarily. If you want a custom approach (e.g., pick spawn points by team or distance), overriding it is the recommended approach. Otherwise, the default random unoccupied spawn is used.
+
+**Q**: What if I want to entirely disable random spawning?  
+**A**: You can override `OnChoosePlayerStart` to pick specific starts or block the default fallback, returning a definite spawn point.
+
+**Q**: How can I add more data to each `ALyraPlayerStart`?  
+**A**: Extend that class to include additional metadata (e.g., spawn region, difficulty markers). Then use `OnChoosePlayerStart` or derived logic to filter them.
+
